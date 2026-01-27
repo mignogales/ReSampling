@@ -1,0 +1,9 @@
+
+name: timemixer
+hparams:
+  hidden_size: 128
+  n_layers: 2
+  # activation: 'elu'
+  seq_len: 12
+  dropout: 0.2
+  down_sampling_layers: [1, 2]

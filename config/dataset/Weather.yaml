@@ -1,0 +1,19 @@
+
+name: Weather
+data_path: ./datasets/Weather/
+
+target: "temperature"
+
+window_size: 12
+horizon: 1
+delay: 14
+stride: 1
+
+splitting:
+  val_len: 0.125
+  test_len: 0.125
+
+
+log_metrics: ["mae", "mre", "mse", "loss"]
+add_covariates: false
+

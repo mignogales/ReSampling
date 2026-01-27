@@ -1,0 +1,31 @@
+// .vscode/launch.json
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "🛠 Debug",
+        "type": "debugpy",
+        "request": "launch",
+
+        "module": "experiments.main",
+        // "module" : "experiments.sweep",
+        // "module" : "scratches",
+        
+        "cwd": "${workspaceFolder}",
+        "console": "integratedTerminal",
+        "env": {
+          // Añade project_root a sys.path para que importe lib/
+          "PYTHONPATH": "${workspaceFolder}",
+          "CUDA_VISIBLE_DEVICES": "3",
+        },
+        "justMyCode": false,
+        "args": [
+          "model=s5",
+          "dataset=Solar",
+          "dataset.window_size=64",
+          "+save_model_weights=True",
+        ]
+      }
+    ]
+  }
+  
