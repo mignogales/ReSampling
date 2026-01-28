@@ -1,0 +1,12 @@
+# Hydra resolvers configuration
+# This file defines custom resolvers used across the project
+
+defaults:
+  - _self_
+
+# Custom resolver configurations
+# Note: Hydra has built-in resolvers like ${now:%Y-%m-%d_%H-%M-%S}
+# But we can define custom ones here if needed
+
+# Example custom resolvers (if you need them):
+# my_custom_resolver: value

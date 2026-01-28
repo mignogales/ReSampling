@@ -4,8 +4,23 @@ Zero-shot evaluation of pretrained time series models under varying sampling rat
 This script loads a pretrained model and evaluates its robustness to temporal
 resolution degradation via resampling. No retraining is performed.
 
-Usage:
-    python test_sampling_rates.py load_model_path=/path/to/weights.pth
+Usage@hydra.main(version_base=None, config_path="../config", config_name="default")
+def main(cfg: DictConfig):
+    
+    # Set run_dir to frequency testing directory
+    cfg.run_dir = cfg.logging.frequency_testing_dir
+    
+    # Setup frequency testing directory structure
+    setup_frequency_test_directories(cfg)
+    
+    # Validate experiment directory path
+    experiment_dir = cfg.get('load_model_path')
+    if experiment_dir is None:
+        raise ValueError("cfg.load_model_path must specify the experiment directory.")on test_sampling_rates.py load_model_path=/path/to/experiment_dir/
+    
+    Where experiment_dir contains:
+        - config.yaml (training configuration)
+        - model_weights.pth (pretrained weights)
 """
 
 import torch
@@ -15,6 +30,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 import copy
+from datetime import datetime
+from datetime import datetime
 
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -23,6 +40,7 @@ from models.gru import GRU
 from models.dmixer import DMixer
 from models.timemixer import TimeMixer
 from models.s5_model import S5
+from models.mlp import SimpleTemporalMLP  # Added based on config
 
 from extras.data_loader import convert_tsf_to_dataframe
 from extras.predictor import WrapPredictor
@@ -35,8 +53,8 @@ from tsl.metrics import torch_metrics
 from colorama import Fore
 
 
-# Sampling rate multipliers: 1.0 = original, 2.0 = half the samples, etc.
-SAMPLING_RATES = [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0]
+# Sampling rate multipliers: 1.0 = original
+SAMPLING_RATES = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
 
 
 def get_model(name: str):
@@ -45,10 +63,64 @@ def get_model(name: str):
         'dmixer': DMixer,
         'timemixer': TimeMixer,
         's5': S5,
+        'mlp': SimpleTemporalMLP,
     }
     if name not in models:
         raise NotImplementedError(f"Model '{name}' not implemented. Available: {list(models.keys())}")
     return models[name]
+
+
+def load_experiment_config(experiment_dir: Path) -> DictConfig:
+    """
+    Load the training configuration from an experiment directory.
+    
+    Args:
+        experiment_dir: Path to directory containing config.yaml
+        
+    Returns:
+        Loaded OmegaConf DictConfig
+    """
+    config_path = experiment_dir / 'config.yaml'
+    
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    
+    loaded_cfg = OmegaConf.load(config_path)
+    print(Fore.GREEN + f"Loaded training config from: {config_path}" + Fore.RESET)
+    
+    return loaded_cfg
+
+
+def merge_configs(base_cfg: DictConfig, loaded_cfg: DictConfig) -> DictConfig:
+    """
+    Merge loaded experiment config with base config.
+    
+    Priority: loaded_cfg values override base_cfg for model/dataset/optimizer settings.
+    Runtime settings (run_dir, wandb, etc.) use base_cfg or are regenerated.
+    
+    Args:
+        base_cfg: Current Hydra config (from CLI/defaults)
+        loaded_cfg: Config loaded from experiment directory
+        
+    Returns:
+        Merged configuration
+    """
+    # Create a merged config - start with base
+    merged = OmegaConf.create(OmegaConf.to_container(base_cfg, resolve=True))
+    
+    # Override critical training settings from loaded config
+    keys_to_override = ['model', 'dataset', 'optimizer', 'lr_scheduler']
+    
+    for key in keys_to_override:
+        if key in loaded_cfg:
+            merged[key] = OmegaConf.create(OmegaConf.to_container(loaded_cfg[key], resolve=True))
+            print(f"  Overriding '{key}' from loaded config")
+    
+    # Preserve load_model_path from base config (CLI argument)
+    if 'load_model_path' in base_cfg:
+        merged['load_model_path'] = base_cfg['load_model_path']
+    
+    return merged
 
 
 def build_predictor(cfg: DictConfig, data_module) -> WrapPredictor:
@@ -62,7 +134,8 @@ def build_predictor(cfg: DictConfig, data_module) -> WrapPredictor:
         output_size=1,
         weighted_graph=None,
         embedding_cfg=cfg.get('embedding'),
-        horizon=cfg.dataset.horizon
+        horizon=cfg.dataset.horizon,
+        window_size=cfg.dataset.window_size,
     )
     model_class.filter_model_args_(model_kwargs)
     model_kwargs.update(cfg.model.hparams)
@@ -154,15 +227,67 @@ def save_results_csv(results: dict, save_path: Path):
     print(Fore.GREEN + f"Results saved to {csv_path}" + Fore.RESET)
 
 
+def setup_frequency_test_directories(cfg: DictConfig) -> str:
+    """Setup and create frequency testing directories."""
+    # Create base logs directory if it doesn't exist
+    base_dir = Path(cfg.logging.base_dir)
+    base_dir.mkdir(exist_ok=True)
+    
+    # Create frequency testing subdirectory
+    freq_test_dir = base_dir / "frequency_testing"
+    freq_test_dir.mkdir(exist_ok=True)
+        
+    # Create a marker file to indicate the experiment type
+    experiment_dir = Path(cfg.run_dir)
+    experiment_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Write experiment type marker
+    marker_file = experiment_dir / ".experiment_type_frequency_test"
+    marker_file.write_text(f"Experiment type: frequency_test\nCreated: {datetime.now()}\n")
+    
+    print(Fore.GREEN + f"Created frequency testing directory: {experiment_dir}" + Fore.RESET)
+    return str(experiment_dir)
+
+
 @hydra.main(version_base=None, config_path="../config", config_name="default")
 def main(cfg: DictConfig):
     
-    # Validate pretrained weights path
-    load_model_path = cfg.get('load_model_path')
-    if load_model_path is None:
-        raise ValueError("cfg.load_model_path must be specified for zero-shot testing.")
+    # Set run_dir to frequency testing directory
+    cfg.run_dir = setup_frequency_test_directories(cfg)
     
-    print(Fore.CYAN + f"Loading pretrained weights from: {load_model_path}" + Fore.RESET)
+    # Validate experiment directory path
+    experiment_dir = cfg.get('load_model_path')
+    if experiment_dir is None:
+        raise ValueError("cfg.load_model_path must specify the experiment directory.")
+    
+    experiment_dir = Path(experiment_dir)
+    if not experiment_dir.exists():
+        raise FileNotFoundError(f"Experiment directory not found: {experiment_dir}")
+    
+    # Construct paths
+    weights_path = experiment_dir / 'model_weights.pth'
+    config_path = experiment_dir / 'config.yaml'
+    
+    if not weights_path.exists():
+        raise FileNotFoundError(f"Model weights not found: {weights_path}")
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    
+    print(Fore.CYAN + "="*60)
+    print("Loading Experiment Configuration")
+    print("="*60 + Fore.RESET)
+    print(f"  Experiment dir: {experiment_dir}")
+    print(f"  Weights: {weights_path}")
+    print(f"  Config: {config_path}")
+    
+    # Load and merge configurations
+    loaded_cfg = load_experiment_config(experiment_dir)
+    cfg = merge_configs(cfg, loaded_cfg)
+    
+    print(Fore.GREEN + f"\nUsing model: {cfg.model.name}" + Fore.RESET)
+    print(f"  Dataset: {cfg.dataset.name}")
+    print(f"  Window size: {cfg.dataset.window_size}")
+    print(f"  Horizon: {cfg.dataset.horizon}")
     
     # Dataset paths
     dataset_paths = {
@@ -175,7 +300,7 @@ def main(cfg: DictConfig):
         raise ValueError(f"Unknown dataset: {cfg.dataset.name}")
     
     data_path = dataset_paths[cfg.dataset.name]
-    print(f"Loading data from {data_path}...")
+    print(f"\nLoading data from {data_path}...")
     
     (loaded_data, frequency, 
      forecast_horizon, contain_missing_values, 
@@ -227,12 +352,14 @@ def main(cfg: DictConfig):
             workers=cfg.optimizer.num_workers,
             splits=cfg.dataset.splitting,
             resample_rate=rate,
+            change_effective_window=False,
+            resample_method='interp'
         )
         data_module.setup()
         
         # Build predictor and load weights
         predictor = build_predictor(cfg, data_module)
-        predictor.load_model(load_model_path)
+        predictor.load_model(str(weights_path))
         predictor.freeze()
         
         # Test
@@ -263,11 +390,11 @@ def main(cfg: DictConfig):
     save_results_csv(results, output_dir)
     plot_results(results, output_dir, cfg.model.name, cfg.dataset.name)
     
-    # Save config
-    cfg_path = output_dir / 'config.yaml'
+    # Save merged config used for this evaluation
+    cfg_path = output_dir / 'eval_config.yaml'
     with open(cfg_path, 'w') as f:
         OmegaConf.save(cfg, f)
-    print(Fore.GREEN + f"Config saved to {cfg_path}" + Fore.RESET)
+    print(Fore.GREEN + f"Evaluation config saved to {cfg_path}" + Fore.RESET)
 
 
 if __name__ == "__main__":

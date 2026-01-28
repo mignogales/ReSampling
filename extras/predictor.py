@@ -214,4 +214,20 @@ class WrapPredictor(Predictor):
             
             torch.save(checkpoint, filepath)
             print(f"Model saved successfully to {filepath}")
-    
+
+    def load_model(self, filepath):
+            """
+            Loads the model weights and necessary metadata from a file.
+            """
+            if not os.path.exists(filepath):
+                raise FileNotFoundError(f"No such file: {filepath}")
+
+            checkpoint = torch.load(filepath, map_location=torch.device('cpu'))
+
+            # Load model state dict
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+
+            # Load predictor state dict (includes optimizer states if needed)
+            self.load_state_dict(checkpoint['state_dict'])
+
+            print(f"Model loaded successfully from {filepath}")

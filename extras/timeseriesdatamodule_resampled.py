@@ -40,6 +40,7 @@ class TimeSeriesDataModuleResampled(pl.LightningDataModule):
                  splits: dict = {'val_len': 0.15, 'test_len': 0.15}, 
                  transform: dict = None,
                  resample_rate: float = 1.0,
+                 change_effective_window: bool = True,
                  resample_method: str = 'fourier'):
         """
         Args:
@@ -78,8 +79,13 @@ class TimeSeriesDataModuleResampled(pl.LightningDataModule):
         
         # Adjusted window size for resampled data
         # Critical: window_size in resampled space = window_size / resample_rate
-        self.effective_window_size = max(1, int(np.round(window_size / resample_rate)))
-        self.effective_horizon = max(1, int(np.round(forecast_horizon / resample_rate)))
+
+        if change_effective_window:
+            self.effective_window_size = max(1, int(np.round(window_size / resample_rate)))
+            self.effective_horizon = max(1, int(np.round(forecast_horizon / resample_rate)))
+        else:
+            self.effective_window_size = window_size
+            self.effective_horizon = forecast_horizon
 
     def _resample_series(self, series: np.ndarray) -> np.ndarray:
         """

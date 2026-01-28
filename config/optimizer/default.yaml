@@ -15,7 +15,7 @@ lr_scheduler:
   last_epoch: -1
 
 epochs: 2
-batch_size: 4128
+batch_size: 516
 grad_clip_val: 5.0
 num_workers: 6
 loss_fn: mae

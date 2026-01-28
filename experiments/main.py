@@ -2,6 +2,9 @@ import torch
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import wandb
+import os
+from pathlib import Path
+from datetime import datetime
 
 from tsl.data import SpatioTemporalDataset, SpatioTemporalDataModule
 from tsl.data.preprocessing import StandardScaler
@@ -18,6 +21,8 @@ from models.gru import GRU
 from models.dmixer import DMixer
 from models.timemixer import TimeMixer
 from models.s5_model import S5
+from models.mlp import SimpleTemporalMLP
+
 
 from extras.data_loader import convert_tsf_to_dataframe
 from extras.predictor import WrapPredictor
@@ -26,6 +31,42 @@ from extras.callbacks import Wandb_callback
 from extras.timeseriesdataset import TimeSeriesDataset
 from extras.timeseriesdatamodule import TimeSeriesDataModule
 from extras.notifications import notify_update
+
+def setup_experiment_directories(cfg: DictConfig, experiment_type: str = "experiment") -> str:
+    """
+    Setup and create experiment directories based on the type of experiment.
+    
+    Args:
+        cfg: Configuration object
+        experiment_type: Type of experiment ('experiment', 'sweep', 'frequency_test')
+    
+    Returns:
+        Path to the created experiment directory
+    """
+    # Create base logs directory if it doesn't exist
+    base_dir = Path(cfg.logging.base_dir)
+    base_dir.mkdir(exist_ok=True)
+    
+    # Create subdirectories for different experiment types
+    experiment_dirs = {
+        "experiment": base_dir / "experiments",
+        "sweep": base_dir / "sweeps", 
+        "frequency_test": base_dir / "frequency_testing"
+    }
+    
+    for exp_type, exp_dir in experiment_dirs.items():
+        exp_dir.mkdir(exist_ok=True)
+        
+    # Create a marker file to indicate the experiment type
+    experiment_dir = Path(cfg.run_dir)
+    experiment_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Write experiment type marker
+    marker_file = experiment_dir / f".experiment_type_{experiment_type}"
+    marker_file.write_text(f"Experiment type: {experiment_type}\nCreated: {datetime.now()}\n")
+    
+    print(Fore.GREEN + f"Created {experiment_type} directory: {experiment_dir}" + Fore.RESET)
+    return str(experiment_dir)
 
 def get_model(name):
     if name == 'gru':
@@ -36,6 +77,8 @@ def get_model(name):
         return TimeMixer
     elif name == 's5':
         return S5
+    elif name == 'mlp':
+        return SimpleTemporalMLP
     else:
         raise NotImplementedError(f"Model {name} is not implemented.")
     
@@ -56,6 +99,12 @@ def build_cfg(cfg: DictConfig):
 
 @hydra.main(version_base=None, config_path="../config", config_name="default")
 def main(cfg: DictConfig):
+
+    # Set run_dir to experiments directory
+    cfg.run_dir = cfg.logging.experiments_dir
+
+    # Setup experiment directory structure
+    setup_experiment_directories(cfg, experiment_type="experiment")
 
     # check if save_model_weights is in cfg, if not set to False
     if 'save_model_weights' not in cfg:
@@ -124,7 +173,8 @@ def main(cfg: DictConfig):
                         output_size = 1,
                         weighted_graph = None,
                         embedding_cfg = cfg.get('embedding'), #### changed from None to embedding_cfg
-                        horizon = cfg.dataset.horizon
+                        horizon = cfg.dataset.horizon,
+                        window_size = cfg.dataset.window_size
                         )
 
     model.filter_model_args_(model_kwargs)
@@ -229,16 +279,17 @@ def main(cfg: DictConfig):
     # training                             #
     ########################################
 
+    ## I comment this part due to this script being used for training only, loading models is done in test_sampling_rates.py
 
-    load_model_path = cfg.get('load_model_path')
-    if load_model_path is not None:
-        predictor.load_model(load_model_path)
-    elif cfg.model.name == 'persistent':
-        pass
-    else:
-        trainer.fit(predictor, train_dataloaders=data_module.train_dataloader(),
+    # load_model_path = cfg.get('load_model_path')
+    # if load_model_path is not None:
+    #     predictor.load_model(load_model_path)
+    # elif cfg.model.name == 'persistent':
+    #     pass
+    # else:
+    
+    trainer.fit(predictor, train_dataloaders=data_module.train_dataloader(),
                     val_dataloaders=data_module.val_dataloader())
-        # predictor.load_model(checkpoint_callback.best_model_path)
 
     ########################################
     # testing                              #

@@ -7,8 +7,9 @@
         "type": "debugpy",
         "request": "launch",
 
-        "module": "experiments.main",
-        // "module" : "experiments.sweep",
+        // "module": "experiments.main",
+        "module" : "experiments.sweep",
+        // "module": "experiments.test_sampling_rates",
         // "module" : "scratches",
         
         "cwd": "${workspaceFolder}",
@@ -20,9 +21,9 @@
         },
         "justMyCode": false,
         "args": [
-          "model=s5",
+          "model=mlp",
           "dataset=Solar",
-          "dataset.window_size=64",
+          "dataset.window_size=16",
           "+save_model_weights=True",
         ]
       }

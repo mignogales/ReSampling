@@ -5,19 +5,29 @@ defaults:
     - keys
   - optimizer: default
   - dataset: FILL_ME
-  - model: dummy
+  - model: mlp
 
 #### Experiment params ########################################################
 hydra:
   run:
-    dir: logs/${model.name}/${dataset.name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: ${logging.experiments_dir}
   sweep:
-    dir: logs/${now:%Y-%m-%d-%H-%M-%S}
+    dir: ${logging.sweeps_dir}
     subdir: ${model.name}/${dataset.name}/${hydra.job.num}
 
 workers: 0
 num_threads: 1
 
-run_dir: logs/${model.name}/${dataset.name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+# Logging directories for different experiment types
+logging:
+  base_dir: logs
+  experiments_dir: ${logging.base_dir}/experiments/${model.name}/${dataset.name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweeps_dir: ${logging.base_dir}/sweeps/${model.name}/${dataset.name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  frequency_testing_dir: ${logging.base_dir}/frequency_testing/${model.name}/${dataset.name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+# Default run_dir (will be overridden by specific scripts)
+run_dir: ${logging.experiments_dir}
 run_name: ${now:%Y-%m-%d_%H-%M-%S}_${hydra:job.num}
+
+load_model_path: logs/mlp/Solar/2026-01-27/17-27-52/
 
