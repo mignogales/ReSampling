@@ -931,7 +931,7 @@ class S5SSMOptimized(nn.Module):
         self.C_tilde_real = nn.Parameter(C_tilde_init.real.clone())
         self.C_tilde_imag = nn.Parameter(C_tilde_init.imag.clone())
         
-        self.D = nn.Parameter(torch.randn(input_size))
+        # self.D = nn.Parameter(torch.randn(input_size))
         
         log_dt = torch.rand(state_size) * (
             math.log(dt_max) - math.log(dt_min)
@@ -954,14 +954,14 @@ class S5SSMOptimized(nn.Module):
             raise ValueError(f"Unknown discretization method: {discretization_method}")
 
         # retain grad for parameters delta, lambda, B_tilde, C and D
-        self.log_delta.retain_grad()
-        self.log_lambda_real.retain_grad()
-        self.lambda_imag.retain_grad()
-        self.B_tilde_real.retain_grad()
-        self.B_tilde_imag.retain_grad()
-        self.C_tilde_real.retain_grad()
-        self.C_tilde_imag.retain_grad()
-        self.D.retain_grad()
+        # self.log_delta.retain_grad()
+        # self.log_lambda_real.retain_grad()
+        # self.lambda_imag.retain_grad()
+        # self.B_tilde_real.retain_grad()
+        # self.B_tilde_imag.retain_grad()
+        # self.C_tilde_real.retain_grad()
+        # self.C_tilde_imag.retain_grad()
+        # self.D.retain_grad()
 
     def _check_cache(self, module, input):
         """Invalidate cache if in training mode."""
@@ -1039,7 +1039,7 @@ class S5SSMOptimized(nn.Module):
         
         # Output: y = C @ x + D * u
         y = torch.einsum('blp,hp->blh', xs, self.C_tilde)
-        y = y.real + self.D.unsqueeze(0).unsqueeze(0) * u
+        y = y.real #+ self.D.unsqueeze(0).unsqueeze(0) * u
         
         return y, xs[:, -1, :]
     
@@ -1057,7 +1057,7 @@ class S5SSMOptimized(nn.Module):
         new_state = lambda_bar.unsqueeze(0) * state + Bu
 
         y = torch.einsum('bp,hp->bh', new_state, self.C_tilde)
-        y = y.real + self.D.unsqueeze(0) * u
+        y = y.real 
         
         return y, new_state
 

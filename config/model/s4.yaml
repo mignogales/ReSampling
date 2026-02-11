@@ -1,16 +1,15 @@
 
-name: s5
+name: s4
 hparams:
-  hidden_size: 128
-  state_size: 192
+  hidden_size: 16
+  state_size: 16
   n_layers: 2
-  num_blocks: 1 # must divide state_size, number of subblocks in the A matrix
   # activation: 'elu'
   dropout: 0.2
   # window_size: 12
 
 training_mode: teacher_forcing
-parallel_chunking: 0.0
+parallel_chunking: 1.0
 discretization_method: zoh
 scan_method: auto
 
@@ -23,7 +22,7 @@ schedule_teacher_forcing:
   # start_value: 1.0
   # end_value: 0.0
 
-  # mode: step
-  # start_value: 1.0
-  # end_value: 0.0
-  # step_epoch: 0
+  mode: step
+  start_value: 1.0
+  end_value: 0.0
+  step_epoch: 0

@@ -1,6 +1,6 @@
 import torch
 import hydra
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 import wandb
 import os
 from pathlib import Path
@@ -22,12 +22,15 @@ from models.dmixer import DMixer
 from models.timemixer import TimeMixer
 from models.s5_model import S5
 from models.mlp import SimpleTemporalMLP
-
+from models.dlinear import LTSFDLinear
+from models.patch_tst import PatchTST
+from models.flowstate import FlowState
+from models.s4_model import S4
 
 from extras.data_loader import convert_tsf_to_dataframe
 from extras.predictor import WrapPredictor
 from extras.metrics_logging import MetricsLogger
-from extras.callbacks import Wandb_callback
+from extras.callbacks import Wandb_callback, ReshuffleTrainData, CheckGrads, ScheduledTeacherForcing
 from extras.timeseriesdataset import TimeSeriesDataset
 from extras.timeseriesdatamodule import TimeSeriesDataModule
 from extras.notifications import notify_update
@@ -79,6 +82,14 @@ def get_model(name):
         return S5
     elif name == 'mlp':
         return SimpleTemporalMLP
+    elif name == 'dlinear':
+        return LTSFDLinear
+    elif name == 'patch_tst':
+        return PatchTST
+    elif name == 'flowstate':
+        return FlowState
+    elif name == 's4':
+        return S4
     else:
         raise NotImplementedError(f"Model {name} is not implemented.")
     
@@ -108,16 +119,26 @@ def main(cfg: DictConfig):
 
     # check if save_model_weights is in cfg, if not set to False
     if 'save_model_weights' not in cfg:
-        cfg.save_model_weights = False
+        with open_dict(cfg):
+            cfg.save_model_weights = False
 
-    if cfg.wandb.enable:
-        wandb.init(
-            project=cfg.wandb.project,
-            entity=cfg.wandb.entity,
-            config=OmegaConf.to_container(cfg.model, resolve=True),
-            name=cfg.wandb.name,
-            # mode=cfg.wandb.mode
-        )
+    # which info to send to wandb. open cfg.model, cfg.optimizer, cfg.dataset and put them in a dict. open everything so nothing is nested
+    config_wandb = {}
+    for main_key in ['model', 'optimizer', 'dataset']:
+        for key, value in cfg[main_key].items():
+            if isinstance(value, dict) or isinstance(value, DictConfig):
+                for sub_key, sub_value in value.items():
+                    config_wandb[f"{main_key}_{sub_key}"] = sub_value
+            else:
+                config_wandb[f"{main_key}_{key}"] = value
+
+    run = wandb.init(
+        project=cfg.wandb.project,
+        entity=cfg.wandb.entity,
+        config=config_wandb,
+        name=cfg.wandb.name,
+        # mode=cfg.wandb.mode
+    )
 
     #######################################
     # dataset Initialization
@@ -128,6 +149,8 @@ def main(cfg: DictConfig):
         data_path = "datasets/Solar/solar_10_minutes_dataset.tsf"
     elif cfg.dataset.name == "Electricity":
         data_path = "datasets/Electricity/australian_electricity_demand_dataset.tsf"
+    elif cfg.dataset.name == "Weather":
+        data_path = "datasets/Weather_austria/weather_dataset.tsf"
     else:
         raise ValueError(f"Unknown dataset: {cfg.dataset.name}")
     
@@ -147,18 +170,26 @@ def main(cfg: DictConfig):
     cfg = notify_update(key='batch_size', wandb_keys=['batch_size'], wandb_config=wandb.config, cfg=cfg, sub_attr='optimizer')
     cfg = notify_update(key='epochs', wandb_keys=['epochs'], wandb_config=wandb.config, cfg=cfg, sub_attr='optimizer')
 
+    # check if model.training_mode exists in cfg.model. cfg.model.training_mode could not exist
+    if getattr(cfg, 'model', None) is not None and 'training_mode' in cfg.model:
+        training_mode = cfg.model.training_mode
+        print(Fore.CYAN + f"Using training mode from config: {training_mode}" + Fore.RESET)
+    else:
+        training_mode = "normal"
+        print(Fore.CYAN + f"No training mode specified in config, using default: {training_mode}" + Fore.RESET)
 
     data_module = TimeSeriesDataModule(
         data=loaded_data,
         window_size=cfg.dataset.window_size,
         transform=transform,
-        batch_size=cfg.optimizer.batch_size,
+        batch_size=cfg.dataset.batch_size,
         frequency=frequency,
         forecast_horizon=cfg.dataset.horizon,
         contain_missing_values=contain_missing_values,
         contain_equal_length=contain_equal_length,
         workers=cfg.optimizer.num_workers,
         splits=cfg.dataset.splitting,
+        training_mode=training_mode
     )
 
     data_module.setup()
@@ -174,8 +205,14 @@ def main(cfg: DictConfig):
                         weighted_graph = None,
                         embedding_cfg = cfg.get('embedding'), #### changed from None to embedding_cfg
                         horizon = cfg.dataset.horizon,
-                        window_size = cfg.dataset.window_size
+                        window_size = cfg.dataset.window_size,
+                        parallel_chunking = cfg.model.parallel_chunking if 'parallel_chunking' in cfg.model else 0.0,
+                        scan_method = cfg.model.get('scan_method', 'auto'),
                         )
+    
+    if model == S5:
+        # add discretization_method from cfg.model to model_kwargs
+        model_kwargs['discretization_method'] = cfg.model.get('discretization_method', 'zoh')
 
     model.filter_model_args_(model_kwargs)
 
@@ -223,7 +260,7 @@ def main(cfg: DictConfig):
         scheduler_kwargs=scheduler_kwargs,
         scale_target=False,
         transform=data_module.transform,
-        batch_size=cfg.optimizer.batch_size,
+        batch_size=cfg.dataset.batch_size,
     )
 
     exp_logger = TensorBoardLogger(save_dir=cfg.run_dir, name=cfg.run_name)
@@ -251,30 +288,33 @@ def main(cfg: DictConfig):
     for key, value in cfg.dataset.items():
         config[key] = value
 
-    run = wandb.init(
-                # Set the wandb entity where your project will be logged (generally your team name).
-                entity=cfg.wandb.entity,
-                # Set the wandb project where this run will be logged.
-                project=cfg.wandb.project,
-                # Track all the hyperparameters and run metadata.
-                config = config,
-            )
-
-    
     wandb_logger_callback = Wandb_callback(
         log_dir=cfg.run_dir,
         run=run,
         log_metrics=log_list,
     )
 
+    reshuffle_train_data = ReshuffleTrainData()
+    
+    # check_grads = CheckGrads(log_dir=cfg.run_dir)
+
+    if model == S5:
+        schedule_teacher_forcing_config = cfg.model.get('schedule_teacher_forcing', False)
+
+        schedule_teacher_forcing = ScheduledTeacherForcing(total_epochs=cfg.optimizer.epochs, **schedule_teacher_forcing_config) if schedule_teacher_forcing_config else None
+
+        callbacks = [early_stop_callback, wandb_logger_callback, reshuffle_train_data, schedule_teacher_forcing]
+    else:
+        callbacks = [early_stop_callback, wandb_logger_callback, reshuffle_train_data]
+
     trainer = Trainer(max_epochs=cfg.optimizer.epochs,
-                        limit_train_batches=None,
+                        limit_train_batches=100,
                         default_root_dir=cfg.run_dir,
                         logger=exp_logger,  # Disable default logger
                         accelerator='gpu' if torch.cuda.is_available() else 'cpu',
                         gradient_clip_val=cfg.optimizer.grad_clip_val,
-                        callbacks=[early_stop_callback, wandb_logger_callback])
-    
+                        callbacks=callbacks)
+
     ########################################
     # training                             #
     ########################################
@@ -287,7 +327,10 @@ def main(cfg: DictConfig):
     # elif cfg.model.name == 'persistent':
     #     pass
     # else:
-    
+
+    # compile model
+    predictor.compile()
+
     trainer.fit(predictor, train_dataloaders=data_module.train_dataloader(),
                     val_dataloaders=data_module.val_dataloader())
 

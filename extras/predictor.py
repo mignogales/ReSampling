@@ -29,7 +29,9 @@ class WrapPredictor(Predictor):
                  scheduler_class: Optional[Type] = None,
                  scheduler_kwargs: Optional[Mapping] = None,
                  sampling: int = -1,
-                 batch_size: int = 32):
+                 batch_size: int = 32,
+                 compile: bool = False, 
+                 RevIN: bool = False):
         
         super(WrapPredictor, self).__init__(       model=model,
                                                     model_class=model_class,
@@ -44,6 +46,9 @@ class WrapPredictor(Predictor):
         self.sampling = sampling
         self.transform = transform
         self.batch_size = batch_size
+
+        if compile:
+            self.model.compile()
 
     def predict_batch(self, 
                         batch,
@@ -106,31 +111,31 @@ class WrapPredictor(Predictor):
         mask = batch.get('mask')
 
         # if we sample, preserve only the input and target of the half with the highest std
-        if self.sampling != -1:
-            if 'x' in batch:
-                x = batch['x']
-                y = batch['y']
-                std = y.std(dim=(1,2,3)) + x.std(dim=(1,2,3))
+        # if self.sampling != -1:
+        #     if 'x' in batch:
+        #         x = batch['x']
+        #         y = batch['y']
+        #         std = y.std(dim=(1,2,3)) + x.std(dim=(1,2,3))
 
-                if self.sampling == 0:
-                    idx = std.nonzero(as_tuple=False).squeeze(1)
-                else:
-                    idx = std.topk(x.shape[0] // self.sampling).indices
+        #         if self.sampling == 0:
+        #             idx = std.nonzero(as_tuple=False).squeeze(1)
+        #         else:
+        #             idx = std.topk(x.shape[0] // self.sampling).indices
 
-                # drop all zero std samples
-                batch['x'] = x[idx, :]
-                batch['y'] = y[idx, :]
+        #         # drop all zero std samples
+        #         batch['x'] = x[idx, :]
+        #         batch['y'] = y[idx, :]
                 
-                if 'u' in batch:
-                    batch['u'] = batch['u'][idx, :]
+        #         if 'u' in batch:
+        #             batch['u'] = batch['u'][idx, :]
 
-                if 'enable_mask' in batch.keys():
-                    batch['enable_mask'] = batch['enable_mask'][idx, :]
+        #         if 'enable_mask' in batch.keys():
+        #             batch['enable_mask'] = batch['enable_mask'][idx, :]
 
-                mask = mask[idx, :]
+        #         mask = mask[idx, :]
 
-            else:
-                raise ValueError("Sampling is only supported for batches with 'x'.")
+        #     else:
+        #         raise ValueError("Sampling is only supported for batches with 'x'.")
 
         y = y_loss = batch['y']
 
@@ -146,6 +151,14 @@ class WrapPredictor(Predictor):
 
         # Compute loss
         loss = self.loss_fn(y_hat_loss, y_loss, mask)
+
+        # print("="*60)
+        # print("Delta = " + str(self.model.blocks[0].ssm.delta[0].detach().cpu().item()))
+        # print("lambda = " + str(self.model.blocks[0].ssm.lambda_[:1].detach().cpu().item()))
+        # print("B_tilde = " + str(self.model.blocks[0].ssm.B_tilde[0, :1].detach().cpu().item()))
+        # print("C_tilde = " + str(self.model.blocks[0].ssm.C_tilde[0, :1].detach().cpu().item()) + " total norm: " + str(torch.norm(self.model.blocks[0].ssm.C_tilde.detach().cpu()).item()))
+        # print("D = " + str(self.model.blocks[0].ssm.D[:1].detach().cpu().item()) + " total norm: " + str(torch.norm(self.model.blocks[0].ssm.D.detach().cpu()).item()))
+        # print("="*60)
 
         # Logging
         self.train_metrics.update(y_hat, y, mask)
@@ -222,7 +235,7 @@ class WrapPredictor(Predictor):
             if not os.path.exists(filepath):
                 raise FileNotFoundError(f"No such file: {filepath}")
 
-            checkpoint = torch.load(filepath, map_location=torch.device('cpu'))
+            checkpoint = torch.load(filepath, map_location=torch.device('cpu'), weights_only=True)
 
             # Load model state dict
             self.model.load_state_dict(checkpoint['model_state_dict'])

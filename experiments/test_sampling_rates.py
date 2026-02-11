@@ -41,6 +41,8 @@ from models.dmixer import DMixer
 from models.timemixer import TimeMixer
 from models.s5_model import S5
 from models.mlp import SimpleTemporalMLP  # Added based on config
+from models.dlinear import LTSFDLinear
+from models.patch_tst import PatchTST
 
 from extras.data_loader import convert_tsf_to_dataframe
 from extras.predictor import WrapPredictor
@@ -64,13 +66,15 @@ def get_model(name: str):
         'timemixer': TimeMixer,
         's5': S5,
         'mlp': SimpleTemporalMLP,
+        'dlinear': LTSFDLinear,
+        'patch_tst': PatchTST,
     }
     if name not in models:
         raise NotImplementedError(f"Model '{name}' not implemented. Available: {list(models.keys())}")
     return models[name]
 
 
-def load_experiment_config(experiment_dir: Path) -> DictConfig:
+def load_experiment_config(config_path: Path) -> DictConfig:
     """
     Load the training configuration from an experiment directory.
     
@@ -80,8 +84,7 @@ def load_experiment_config(experiment_dir: Path) -> DictConfig:
     Returns:
         Loaded OmegaConf DictConfig
     """
-    config_path = experiment_dir / 'config.yaml'
-    
+
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
     
@@ -119,6 +122,10 @@ def merge_configs(base_cfg: DictConfig, loaded_cfg: DictConfig) -> DictConfig:
     # Preserve load_model_path from base config (CLI argument)
     if 'load_model_path' in base_cfg:
         merged['load_model_path'] = base_cfg['load_model_path']
+
+    # Preserve logging settings from base config
+    if "log_metrics" in base_cfg.dataset:
+        merged.dataset.log_metrics = base_cfg.dataset.log_metrics
     
     return merged
 
@@ -254,147 +261,183 @@ def main(cfg: DictConfig):
     
     # Set run_dir to frequency testing directory
     cfg.run_dir = setup_frequency_test_directories(cfg)
-    
-    # Validate experiment directory path
-    experiment_dir = cfg.get('load_model_path')
-    if experiment_dir is None:
-        raise ValueError("cfg.load_model_path must specify the experiment directory.")
-    
-    experiment_dir = Path(experiment_dir)
-    if not experiment_dir.exists():
-        raise FileNotFoundError(f"Experiment directory not found: {experiment_dir}")
-    
-    # Construct paths
-    weights_path = experiment_dir / 'model_weights.pth'
-    config_path = experiment_dir / 'config.yaml'
-    
-    if not weights_path.exists():
-        raise FileNotFoundError(f"Model weights not found: {weights_path}")
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-    
-    print(Fore.CYAN + "="*60)
-    print("Loading Experiment Configuration")
-    print("="*60 + Fore.RESET)
-    print(f"  Experiment dir: {experiment_dir}")
-    print(f"  Weights: {weights_path}")
-    print(f"  Config: {config_path}")
-    
-    # Load and merge configurations
-    loaded_cfg = load_experiment_config(experiment_dir)
-    cfg = merge_configs(cfg, loaded_cfg)
-    
-    print(Fore.GREEN + f"\nUsing model: {cfg.model.name}" + Fore.RESET)
-    print(f"  Dataset: {cfg.dataset.name}")
-    print(f"  Window size: {cfg.dataset.window_size}")
-    print(f"  Horizon: {cfg.dataset.horizon}")
-    
-    # Dataset paths
-    dataset_paths = {
-        "Wind": "datasets/Wind/wind_farms_minutely_dataset_with_missing_values.tsf",
-        "Solar": "datasets/Solar/solar_10_minutes_dataset.tsf",
-        "Electricity": "datasets/Electricity/australian_electricity_demand_dataset.tsf",
-    }
-    
-    if cfg.dataset.name not in dataset_paths:
-        raise ValueError(f"Unknown dataset: {cfg.dataset.name}")
-    
-    data_path = dataset_paths[cfg.dataset.name]
-    print(f"\nLoading data from {data_path}...")
-    
-    (loaded_data, frequency, 
-     forecast_horizon, contain_missing_values, 
-     contain_equal_length) = convert_tsf_to_dataframe(data_path)
-    
-    # Transform configuration
-    scale_axis = (0,) if cfg.get('scale_axis') == 'node' else (0, 1)
-    transform = {'target': StandardScaler(axis=scale_axis)}
-    
-    # Output directory
-    output_dir = Path(cfg.run_dir) / 'sampling_rate_analysis'
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Results storage
-    results = {
-        'sampling_rate': [],
-        'mse': [],
-        'mae': [],
-        'num_test_samples': []
-    }
-    
-    # Trainer configuration (testing only)
-    trainer = Trainer(
-        accelerator='gpu' if torch.cuda.is_available() else 'cpu',
-        logger=False,
-        enable_progress_bar=True,
-    )
-    
-    print(Fore.YELLOW + "\n" + "="*60)
-    print("Starting Zero-Shot Evaluation Across Sampling Rates")
-    print("="*60 + Fore.RESET)
-    
-    for rate in SAMPLING_RATES:
-        print(Fore.CYAN + f"\n[Rate {rate:.1f}x] Preparing data module..." + Fore.RESET)
+
+    list_configs = [
+        # Dlinear on Solar
+        {"weights_path" : "logs/sweeps/sweep_dlinear_Solar/128_32/best_models/rank_01_sweep_dlinear_Solar_xxxxx_val_loss_0.169763.pth",
+         "config_path" : "logs/sweeps/sweep_dlinear_Solar/128_32/best_configs/rank_01_sweep_dlinear_Solar_xxxxx_config.yaml"},
+        # S5 on Solar
+        {"weights_path" : "logs/sweeps/sweep_s5_Solar/128_32/best_models/rank_01_sweep_s5_Solar_chwrpi1y_val_loss_0.129626.pth",
+         "config_path" : "logs/sweeps/sweep_s5_Solar/128_32/best_configs/rank_01_sweep_s5_Solar_chwrpi1y_config.yaml",
+         "modify_s5_sampling_deltas": False,
+         "generate_more_samples": True
+        },
+    ]
+
+    for config in list_configs:
+        # Validate experiment directory path
+        # Updated structure: logs/sweeps/sweep_{model}_{dataset}/{window_size}_{horizon}/best_models/...
+        weights_path = config["weights_path"]
+        config_path = config["config_path"]
+        modify_s5_sampling_deltas = config.get("modify_s5_sampling_deltas", False)
+        generate_more_samples = config.get("generate_more_samples", True)
+        weights_path = Path(weights_path)
+        config_path = Path(config_path)
+
+        if weights_path is None:
+            raise ValueError("cfg.load_model_path must specify the experiment directory.")
         
-        # Deep copy to avoid mutations across iterations
-        data_copy = copy.deepcopy(loaded_data)
+        experiment_dir = Path(weights_path).parent
         
-        # Create data module with resampling
-        data_module = TimeSeriesDataModuleResampled(
-            data=data_copy,
-            window_size=cfg.dataset.window_size,
-            transform=transform,
-            batch_size=cfg.optimizer.batch_size,
-            frequency=frequency,
-            forecast_horizon=cfg.dataset.horizon,
-            contain_missing_values=contain_missing_values,
-            contain_equal_length=contain_equal_length,
-            workers=cfg.optimizer.num_workers,
-            splits=cfg.dataset.splitting,
-            resample_rate=rate,
-            change_effective_window=False,
-            resample_method='interp'
+        experiment_dir = Path(experiment_dir)
+        if not experiment_dir.exists():
+            raise FileNotFoundError(f"Experiment directory not found: {experiment_dir}")
+        
+        if not weights_path.exists():
+            raise FileNotFoundError(f"Model weights not found: {weights_path}")
+        if not config_path.exists():
+            raise FileNotFoundError(f"Config file not found: {config_path}")
+        
+        print(Fore.CYAN + "="*60)
+        print("Loading Experiment Configuration")
+        print("="*60 + Fore.RESET)
+        print(f"  Experiment dir: {experiment_dir}")
+        print(f"  Weights: {weights_path}")
+        print(f"  Config: {config_path}")
+        
+        # Load and merge configurations
+        loaded_cfg = load_experiment_config(config_path)
+        cfg = merge_configs(cfg, loaded_cfg)
+        
+        print(Fore.GREEN + f"\nUsing model: {cfg.model.name}" + Fore.RESET)
+        print(f"  Dataset: {cfg.dataset.name}")
+        print(f"  Window size: {cfg.dataset.window_size}")
+        print(f"  Horizon: {cfg.dataset.horizon}")
+        
+        # Dataset paths
+        dataset_paths = {
+            "Wind": "datasets/Wind/wind_farms_minutely_dataset_with_missing_values.tsf",
+            "Solar": "datasets/Solar/solar_10_minutes_dataset.tsf",
+            "Electricity": "datasets/Electricity/australian_electricity_demand_dataset.tsf",
+        }
+        
+        if cfg.dataset.name not in dataset_paths:
+            raise ValueError(f"Unknown dataset: {cfg.dataset.name}")
+        
+        data_path = dataset_paths[cfg.dataset.name]
+        print(f"\nLoading data from {data_path}...")
+        
+        (loaded_data, frequency, 
+        forecast_horizon, contain_missing_values, 
+        contain_equal_length) = convert_tsf_to_dataframe(data_path)
+        
+        # Transform configuration
+        scale_axis = (0,) if cfg.get('scale_axis') == 'node' else (0, 1)
+        transform = {'target': StandardScaler(axis=scale_axis)}
+        
+        # Output directory
+        # experiment_dir is best_models, so go up to the window_horizon folder
+        window_horizon_folder = experiment_dir.parent  # This should be the {window_size}_{horizon} folder
+        output_dir = window_horizon_folder / 'sampling_rate_analysis'
+        if cfg.model.name.lower() == 's5':
+            if generate_more_samples:
+                output_dir = output_dir / 's5_longer_horizon'
+            else:
+                output_dir = output_dir / 's5_modified_deltas' if modify_s5_sampling_deltas else output_dir / 's5_original_deltas'
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Results storage
+        results = {
+            'sampling_rate': [],
+            'mse': [],
+            'mae': [],
+            'num_test_samples': []
+        }
+        
+        # Trainer configuration (testing only)
+        trainer = Trainer(
+            accelerator='gpu' if torch.cuda.is_available() else 'cpu',
+            logger=False,
+            enable_progress_bar=True,
         )
-        data_module.setup()
         
-        # Build predictor and load weights
-        predictor = build_predictor(cfg, data_module)
-        predictor.load_model(str(weights_path))
-        predictor.freeze()
+        print(Fore.YELLOW + "\n" + "="*60)
+        print("Starting Zero-Shot Evaluation Across Sampling Rates")
+        print("="*60 + Fore.RESET)
         
-        # Test
-        print(f"[Rate {rate:.1f}x] Running test...")
-        test_results = trainer.test(predictor, dataloaders=data_module.test_dataloader(), verbose=False)
+        for rate in SAMPLING_RATES:
+            print(Fore.CYAN + f"\n[Rate {rate:.1f}x] Preparing data module..." + Fore.RESET)
+            
+            # Deep copy to avoid mutations across iterations
+            data_copy = copy.deepcopy(loaded_data)
+            
+            # Create data module with resampling
+            data_module = TimeSeriesDataModuleResampled(
+                data=data_copy,
+                window_size=cfg.dataset.window_size,
+                transform=transform,
+                batch_size=cfg.optimizer.batch_size,
+                frequency=frequency,
+                forecast_horizon=cfg.dataset.horizon,
+                contain_missing_values=contain_missing_values,
+                contain_equal_length=contain_equal_length,
+                workers=cfg.optimizer.num_workers,
+                splits=cfg.dataset.splitting,
+                resample_rate=rate,
+                change_effective_window=False,
+                resample_method='fourier' # 'interp' or 'fourier'
+            )
+            data_module.setup()
+            
+            # Build predictor and load weights
+            predictor = build_predictor(cfg, data_module)
+            predictor.load_model(str(weights_path))
+            predictor.freeze()
+            
+            # if the model is a S5, multiply lambdas by the resampling rate
+            if cfg.model.name.lower() == 's5' and modify_s5_sampling_deltas:
+                print(Fore.CYAN + f"[Rate {rate:.1f}x] Adjusting S5 deltas for resampling rate..." + Fore.RESET)
+                predictor.model.change_deltas(rate)
+            if cfg.model.name.lower() == 's5' and generate_more_samples and rate > 1.0:
+                print(Fore.CYAN + f"[Rate {rate:.1f}x] Generating more samples for S5..." + Fore.RESET)
+                predictor.model.horizon = int(cfg.dataset.horizon * rate)
+                predictor.model.decimate = int(rate)
+
+            # Test
+            print(f"[Rate {rate:.1f}x] Running test...")
+            test_results = trainer.test(predictor,
+                                        dataloaders=data_module.test_dataloader(),
+                                        verbose=False)
+            
+            # Extract metrics
+            test_metrics = test_results[0]
+            mse = test_metrics.get('test_mse', test_metrics.get('test_MaskedMSE', np.nan))
+            mae = test_metrics.get('test_mae', test_metrics.get('test_MaskedMAE', np.nan))
+            
+            results['sampling_rate'].append(rate)
+            results['mse'].append(mse)
+            results['mae'].append(mae)
+            results['num_test_samples'].append(len(data_module.test_dataset))
+            
+            print(Fore.GREEN + f"[Rate {rate:.1f}x] MSE: {mse:.6f} | MAE: {mae:.6f}" + Fore.RESET)
         
-        # Extract metrics
-        test_metrics = test_results[0]
-        mse = test_metrics.get('test_mse', test_metrics.get('test_MaskedMSE', np.nan))
-        mae = test_metrics.get('test_mae', test_metrics.get('test_MaskedMAE', np.nan))
+        # Summary
+        print(Fore.YELLOW + "\n" + "="*60)
+        print("Evaluation Complete - Summary")
+        print("="*60 + Fore.RESET)
         
-        results['sampling_rate'].append(rate)
-        results['mse'].append(mse)
-        results['mae'].append(mae)
-        results['num_test_samples'].append(len(data_module.test_dataset))
+        for i, rate in enumerate(results['sampling_rate']):
+            print(f"  Rate {rate:.1f}x: MSE={results['mse'][i]:.6f}, MAE={results['mae'][i]:.6f}")
         
-        print(Fore.GREEN + f"[Rate {rate:.1f}x] MSE: {mse:.6f} | MAE: {mae:.6f}" + Fore.RESET)
-    
-    # Summary
-    print(Fore.YELLOW + "\n" + "="*60)
-    print("Evaluation Complete - Summary")
-    print("="*60 + Fore.RESET)
-    
-    for i, rate in enumerate(results['sampling_rate']):
-        print(f"  Rate {rate:.1f}x: MSE={results['mse'][i]:.6f}, MAE={results['mae'][i]:.6f}")
-    
-    # Save and plot
-    save_results_csv(results, output_dir)
-    plot_results(results, output_dir, cfg.model.name, cfg.dataset.name)
-    
-    # Save merged config used for this evaluation
-    cfg_path = output_dir / 'eval_config.yaml'
-    with open(cfg_path, 'w') as f:
-        OmegaConf.save(cfg, f)
-    print(Fore.GREEN + f"Evaluation config saved to {cfg_path}" + Fore.RESET)
+        # Save and plot
+        save_results_csv(results, output_dir)
+        plot_results(results, output_dir, cfg.model.name, cfg.dataset.name)
+        
+        # Save merged config used for this evaluation
+        cfg_path = output_dir / 'eval_config.yaml'
+        with open(cfg_path, 'w') as f:
+            OmegaConf.save(cfg, f)
+        print(Fore.GREEN + f"Evaluation config saved to {cfg_path}" + Fore.RESET)
 
 
 if __name__ == "__main__":

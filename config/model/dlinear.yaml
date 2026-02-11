@@ -1,8 +1,7 @@
 
-name: dmixer
+name: dlinear
 hparams:
   hidden_size: 128
   n_layers: 2
   activation: 'elu'
   dropout: 0.2
-  window_size: 12

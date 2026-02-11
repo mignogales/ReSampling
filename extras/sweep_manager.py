@@ -88,6 +88,8 @@ class SweepManager:
         self.results_file = self.sweep_dir / "sweep_results.json"
         self.best_models_dir = self.sweep_dir / "best_models"
         self.best_models_dir.mkdir(exist_ok=True)
+        self.best_configs_dir = self.sweep_dir / "best_configs"
+        self.best_configs_dir.mkdir(exist_ok=True)
         self.lock_file = self.sweep_dir / ".sweep.lock"
         
         # Setup logging
@@ -235,6 +237,12 @@ class SweepManager:
                 self._save_best_model(result)
                 self.logger.info(f"Model {run_name} added to top-{self.top_k} "
                                f"({self.metric_name}: {metric_value:.6f})")
+            else:
+                # Model didn't make top-k, delete the run directory
+                self.logger.info(f"Model {run_name} ({self.metric_name}: {metric_value:.6f}) "
+                               f"did not make top-{self.top_k}")
+                if self.cleanup_intermediate:
+                    self._delete_run_directory(model_path)
             
             # Clean up models outside top-k
             if self.cleanup_intermediate:
@@ -261,47 +269,118 @@ class SweepManager:
             # Copy model file
             model_src = Path(result.model_path)
             if model_src.exists():
-                model_dst = (self.best_models_dir / 
-                           f"rank_{current_rank:02d}_{safe_name}_{model_src.name}")
+                # Use a cleaner filename: rank_run_name_metric_value.pth
+                model_ext = model_src.suffix  # .ckpt or .pth
+                model_dst = self.best_models_dir / f"rank_{current_rank:02d}_{safe_name}_{self.metric_name}_{result.metric_value:.6f}{model_ext}"
                 shutil.copy2(model_src, model_dst)
+                self.logger.info(f"Copied model to best_models: {model_dst.name}")
+                
                 result.model_path = str(model_dst)  # Update path
             
-            # Copy config file
+            # Copy config file (contains model hyperparameters)
             config_src = Path(result.config_path)
             if config_src.exists():
-                config_dst = (self.best_models_dir / 
-                            f"rank_{current_rank:02d}_{safe_name}_config.yaml")
+                config_dst = self.best_configs_dir / f"rank_{current_rank:02d}_{safe_name}_config.yaml"
                 shutil.copy2(config_src, config_dst)
+                self.logger.info(f"Copied config to best_configs: {config_dst.name}")
                 result.config_path = str(config_dst)  # Update path
+            
+            # Delete the run directory after successful copy
+            if self.cleanup_intermediate and model_src.exists():
+                self._delete_run_directory(str(model_src))
             
         except Exception as e:
             self.logger.error(f"Could not save best model {result.run_name}: {e}")
     
     def _cleanup_old_models(self):
-        """Remove models that are no longer in top-k."""
+        """Remove models that are no longer in top-k from best_models directory."""
         try:
-            # Keep only top-k results
-            models_to_keep = self.results[:self.top_k]
-            models_to_remove = self.results[self.top_k:]
+            # Get the list of files currently in best_models directory
+            if not self.best_models_dir.exists():
+                return
             
-            for result in models_to_remove:
-                # Remove model file
-                model_path = Path(result.model_path)
-                if model_path.exists() and str(self.best_models_dir) in str(model_path):
-                    model_path.unlink()
+            # Collect run_ids that should be kept (top-k)
+            top_k_run_ids = {result.run_id for result in self.results[:self.top_k]}
+            
+            # Scan best_models directory and remove files not in top-k
+            for file_path in self.best_models_dir.iterdir():
+                if file_path.is_file():
+                    # Check if this file belongs to a top-k model
+                    should_keep = False
+                    for result in self.results[:self.top_k]:
+                        if (result.model_path and Path(result.model_path) == file_path) or \
+                           (result.config_path and Path(result.config_path) == file_path):
+                            should_keep = True
+                            break
                     
-                # Remove config file  
-                config_path = Path(result.config_path)
-                if config_path.exists() and str(self.best_models_dir) in str(config_path):
-                    config_path.unlink()
+                    # Remove file if it's not in top-k
+                    if not should_keep:
+                        try:
+                            file_path.unlink()
+                            self.logger.info(f"Cleaned up old file: {file_path.name}")
+                        except Exception as e:
+                            self.logger.warning(f"Could not remove {file_path}: {e}")
             
-            # Update results to keep only top-k
-            self.results = models_to_keep
+            # Keep only top-k results in memory
+            self.results = self.results[:self.top_k]
             
-            self.logger.info(f"Cleaned up {len(models_to_remove)} old models")
+            self.logger.info(f"Cleanup complete - keeping top {self.top_k} models")
             
         except Exception as e:
             self.logger.error(f"Error during cleanup: {e}")
+    
+    def _delete_checkpoint(self, checkpoint_path: str):
+        """Delete a checkpoint file that didn't make top-k."""
+        try:
+            checkpoint_path = Path(checkpoint_path)
+            if checkpoint_path.exists() and checkpoint_path.is_file():
+                # Only delete if it's in the sweep directory (safety check)
+                if str(self.sweep_dir) in str(checkpoint_path.resolve()):
+                    checkpoint_path.unlink()
+                    self.logger.info(f"Deleted non-top-k checkpoint: {checkpoint_path.name}")
+                else:
+                    self.logger.warning(
+                        f"Checkpoint outside sweep directory, skipping deletion: {checkpoint_path}"
+                    )
+        except Exception as e:
+            self.logger.error(f"Error deleting checkpoint {checkpoint_path}: {e}")
+    
+    def _delete_run_directory(self, model_path: str):
+        """Delete the entire run directory for a model that didn't make top-k."""
+        try:
+            model_path = Path(model_path)
+            run_dir = model_path.parent
+            
+            # Safety checks
+            if not run_dir.exists():
+                return
+            
+            if not run_dir.is_dir():
+                return
+            
+            # Only delete if it's a subdirectory of sweep_dir
+            if str(self.sweep_dir) not in str(run_dir.resolve()):
+                self.logger.warning(
+                    f"Run directory outside sweep directory, skipping deletion: {run_dir}"
+                )
+                return
+            
+            # Don't delete the sweep root itself
+            if run_dir == self.sweep_dir:
+                self.logger.warning("Attempted to delete sweep root directory, skipping")
+                return
+            
+            # Check if this looks like a run-specific directory
+            if run_dir.name.startswith('sweep_'):
+                shutil.rmtree(run_dir)
+                self.logger.info(f"Deleted run directory: {run_dir.name}")
+            else:
+                self.logger.warning(
+                    f"Directory doesn't match run pattern, skipping deletion: {run_dir.name}"
+                )
+                
+        except Exception as e:
+            self.logger.error(f"Error deleting run directory: {e}")
     
     def _generate_summary(self):
         """Generate a summary report of the sweep."""
@@ -387,6 +466,44 @@ class SweepManager:
             if result.wandb_run_id:
                 print(f"    W&B: {result.wandb_run_id}")
             print()
+    
+    def cleanup_run_directories(self, keep_last_n: int = 10):
+        """
+        Clean up old run directories to save disk space.
+        Keeps only the last N runs' temporary files.
+        
+        Args:
+            keep_last_n: Number of recent runs to keep temp files for
+        """
+        try:
+            # Get all run directories sorted by timestamp
+            run_dirs = []
+            for result in self.results:
+                model_path = Path(result.model_path)
+                # Look for the run's temporary directory (not in best_models)
+                if 'best_models' not in str(model_path):
+                    run_dir = model_path.parent
+                    if run_dir.exists():
+                        run_dirs.append((result.timestamp, run_dir, result.run_id))
+            
+            # Sort by timestamp (newest first)
+            run_dirs.sort(reverse=True)
+            
+            # Remove old run directories (keep only last N)
+            for i, (timestamp, run_dir, run_id) in enumerate(run_dirs):
+                if i >= keep_last_n:
+                    # Check if this run is in top-k (don't delete those)
+                    is_top_k = any(r.run_id == run_id for r in self.results[:self.top_k])
+                    if not is_top_k:
+                        try:
+                            if run_dir.exists() and run_dir != self.sweep_dir:
+                                shutil.rmtree(run_dir)
+                                self.logger.info(f"Cleaned up old run directory: {run_dir}")
+                        except Exception as e:
+                            self.logger.warning(f"Could not remove {run_dir}: {e}")
+            
+        except Exception as e:
+            self.logger.error(f"Error during run directory cleanup: {e}")
 
 
 def create_sweep_manager(

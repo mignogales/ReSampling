@@ -1,16 +1,22 @@
 
 name: Solar
 
-window_size: 12
-horizon: 12
+window_size: 128
+horizon: 64
 delay: 0
 stride: 1
 
 splitting:
-  val_len: 0.125
-  test_len: 0.125
+  val_len: 0.05
+  test_len: 0.05
 
+batch_size: 1048
 
-log_metrics: ["mae", "mre", "mse", "loss"]
+# log_metrics: ["mae", "mre", "mse", "loss", "mae_at_1_step", "mae_at_3_step", "mae_at_6_step", "mae_at_12_step"]
+# log_metrics: ["mae", "mre", "mse", "loss"]
+log_metrics: ["mae", "mse", "loss"]
 add_covariates: false
+
+standard_normalization: false
+ReVIN: true
 

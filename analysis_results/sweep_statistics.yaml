@@ -1,0 +1,63 @@
+dataset_statistics:
+  Solar:
+    avg_val_loss: !!python/object/apply:numpy._core.multiarray.scalar
+    - &id001 !!python/object/apply:numpy.dtype
+      args:
+      - f8
+      - false
+      - true
+      state: !!python/tuple
+      - 3
+      - <
+      - null
+      - null
+      - null
+      - -1
+      - -1
+      - 0
+    - !!binary |
+      vVXXoZqSwD8=
+    best_val_loss: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      vVXXoZqSwD8=
+    count: 2
+    models:
+    - s5
+model_statistics:
+  s5:
+    avg_val_loss: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      vVXXoZqSwD8=
+    best_val_loss: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      vVXXoZqSwD8=
+    count: 2
+    datasets:
+    - Solar
+total_experiments: 2
+unique_datasets: 1
+unique_models: 1
+validation_loss:
+  max: !!python/object/apply:numpy._core.multiarray.scalar
+  - *id001
+  - !!binary |
+    vVXXoZqSwD8=
+  mean: !!python/object/apply:numpy._core.multiarray.scalar
+  - *id001
+  - !!binary |
+    vVXXoZqSwD8=
+  median: !!python/object/apply:numpy._core.multiarray.scalar
+  - *id001
+  - !!binary |
+    vVXXoZqSwD8=
+  min: !!python/object/apply:numpy._core.multiarray.scalar
+  - *id001
+  - !!binary |
+    vVXXoZqSwD8=
+  std: !!python/object/apply:numpy._core.multiarray.scalar
+  - *id001
+  - !!binary |
+    AAAAAAAA+H8=

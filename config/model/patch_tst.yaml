@@ -1,0 +1,14 @@
+
+name: patch_tst
+hparams:
+  d_model: 128
+  n_heads: 16
+  n_layers: 3
+  d_ff: 256
+  use_revin: False
+  
+  activation: 'elu'
+  dropout: 0.2
+
+  patch_len: 16
+  stride: 8

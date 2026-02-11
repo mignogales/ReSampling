@@ -15,7 +15,7 @@ hydra:
     dir: ${logging.sweeps_dir}
     subdir: ${model.name}/${dataset.name}/${hydra.job.num}
 
-workers: 0
+workers: 2
 num_threads: 1
 
 # Logging directories for different experiment types
@@ -29,5 +29,5 @@ logging:
 run_dir: ${logging.experiments_dir}
 run_name: ${now:%Y-%m-%d_%H-%M-%S}_${hydra:job.num}
 
-load_model_path: logs/mlp/Solar/2026-01-27/17-27-52/
-
+load_model_path: logs/sweeps/sweep_s5_Solar/best_models/rank_03_sweep_s5_20260129_144349_58b0s0r6_best_model_epoch_000_val_loss_0.125474.pth
+load_config_path: logs/sweeps/sweep_s5_Solar/best_models/rank_03_sweep_s5_20260129_144349_58b0s0r6_config.yaml

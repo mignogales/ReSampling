@@ -1,7 +1,7 @@
 
 name: Adam
 hparams:
-  lr: 0.0005
+  lr: 0.00001
   weight_decay: 0.0001
   betas:
     - 0.9
@@ -14,10 +14,10 @@ lr_scheduler:
   eta_min: 0.0
   last_epoch: -1
 
-epochs: 2
-batch_size: 516
-grad_clip_val: 5.0
-num_workers: 6
+epochs: 20
+batch_size: 2048
+grad_clip_val: 1.0
+num_workers: 1
 loss_fn: mae
 
 patience: 10

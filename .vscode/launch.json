@@ -7,11 +7,20 @@
         "type": "debugpy",
         "request": "launch",
 
-        // "module": "experiments.main",
-        "module" : "experiments.sweep",
-        // "module": "experiments.test_sampling_rates",
+        "module": "experiments.main",
+        // "module" : "experiments.sweep",
         // "module" : "scratches",
-        
+
+        // "module" : "scripts.analyze_sweeps_results",
+
+        // "module": "experiments.test_sampling_rates",
+        // "module": "experiments.combine_sampling_results",
+
+        // "module" : "models.s5_model",
+        // "module" : "models.s4_model",
+        // "module" : "models.triton_kernels",
+        // "module": "experiments.benchmark_parallel_chunk",
+
         "cwd": "${workspaceFolder}",
         "console": "integratedTerminal",
         "env": {
@@ -21,10 +30,12 @@
         },
         "justMyCode": false,
         "args": [
-          "model=mlp",
+          "model=flowstate",
           "dataset=Solar",
-          "dataset.window_size=16",
-          "+save_model_weights=True",
+          // "dataset=Weather",
+          // "model.parallel_chunking=1.0",
+          // "dataset.window_size=64",
+          // "+save_model_weights=True",
         ]
       }
     ]

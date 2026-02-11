@@ -1,5 +1,6 @@
 from pytorch_lightning.callbacks import Callback
 from pathlib import Path
+import colorama as clr
 
 class MetricsHistory(Callback):
     def __init__(self, log_metrics, log_dir=None):
@@ -139,10 +140,6 @@ class BestModelTracker(Callback):
             try:
                 if best_link_path.exists():
                     best_link_path.unlink()
-                # Copy the best model to a standard name
-                import shutil
-                shutil.copy2(model_path, best_link_path)
-                print(f"Best model also saved as: {best_link_path}")
             except Exception as e:
                 print(f"Warning: Could not create best_model.pth link: {e}")
             
@@ -209,3 +206,92 @@ class Wandb_callback(Callback):
         log_dict = {"test_"+k: m["test_"+k].cpu().item() for k in self.log_metrics}
 
         self.run.log(log_dict, step = self.epoch)
+
+class ReshuffleTrainData(Callback):
+    def __init__(self):
+        super().__init__()
+
+    def on_train_epoch_start(self, trainer, pl_module):
+        # Reshuffle training data at the start of each epoch
+        if hasattr(trainer.train_dataloader.dataset, 'shuffle_samples'):
+            trainer.train_dataloader.dataset.shuffle_samples()
+
+        print(clr.Fore.GREEN + "\n Training data reshuffled for new epoch." + clr.Fore.RESET)
+
+
+class CheckGrads(Callback):
+    def __init__(self, log_dir=None):
+        super().__init__()
+        self.log_dir = log_dir
+
+    def on_after_backward(self, trainer, pl_module):
+        # this are the vars which must show norm
+        # self.log_delta.retain_grad()
+        # self.log_lambda_real.retain_grad()
+        # self.lambda_imag.retain_grad()
+        # self.B_tilde_real.retain_grad()
+        # self.B_tilde_imag.retain_grad()
+        # self..retain_grad()
+        # self.C_tilde_imag.retain_grad()
+        # self.D.retain_grad()
+        
+        print("+"*60)
+        # After a forward+backward pass in sequence mode
+        print(f"grad norm delta: {trainer.model.model.blocks[0].ssm.log_delta.grad.norm():.2e}")
+        print(f"grad norm lambda: {trainer.model.model.blocks[0].ssm.log_lambda_real.grad.norm():.2e}")
+        print(f"grad norm lambda imag: {trainer.model.model.blocks[0].ssm.lambda_imag.grad.norm():.2e}")
+        print(f"grad norm B_tilde: {trainer.model.model.blocks[0].ssm.B_tilde_real.grad.norm():.2e}")
+        print(f"grad norm B_tilde imag: {trainer.model.model.blocks[0].ssm.B_tilde_imag.grad.norm():.2e}")
+        print(f"grad norm C_tilde: {trainer.model.model.blocks[0].ssm.C_tilde_real.grad.norm():.2e}")
+        print(f"grad norm C_tilde imag: {trainer.model.model.blocks[0].ssm.C_tilde_imag.grad.norm():.2e}")
+        print(f"grad norm D: {trainer.model.model.blocks[0].ssm.D.grad.norm():.2e}")
+        print("+"*60)
+
+        # append values to a log file
+        log_file = "./grad_logs_parallel.txt"
+        with open(log_file, "a") as f:
+            f.write(f"Log delta: {trainer.current_epoch},{trainer.model.model.blocks[0].ssm.log_delta.grad.norm():.6e},"
+                    f"Log delta real: {trainer.model.model.blocks[0].ssm.log_lambda_real.grad.norm():.6e},"
+                    f"Log delta imag: {trainer.model.model.blocks[0].ssm.lambda_imag.grad.norm():.6e},"
+                    f"Log B_tilde real: {trainer.model.model.blocks[0].ssm.B_tilde_real.grad.norm():.6e},"
+                    f"Log B_tilde imag: {trainer.model.model.blocks[0].ssm.B_tilde_imag.grad.norm():.6e},"
+                    f"Log C_tilde real: {trainer.model.model.blocks[0].ssm.C_tilde_real.grad.norm():.6e},"
+                    f"Log C_tilde imag: {trainer.model.model.blocks[0].ssm.C_tilde_imag.grad.norm():.6e},"
+                    f"Log D: {trainer.model.model.blocks[0].ssm.D.grad.norm():.6e}\n")
+            
+
+class ScheduledTeacherForcing(Callback):
+    def __init__(self, mode="None", start_value=1.0, end_value=0.0, total_epochs=100, step_epoch=50):
+        super().__init__()
+        self.mode = mode
+        self.start_value = start_value
+        self.end_value = end_value
+        self.total_epochs = total_epochs
+        self.step_epoch = step_epoch
+
+    def on_train_epoch_start(self, trainer, pl_module):
+        current_epoch = trainer.current_epoch
+        
+        if self.mode == 'linear':
+            new_teacher_forcing_ratio = max(
+                self.end_value, 
+                self.start_value - (self.start_value - self.end_value) * (current_epoch / self.total_epochs)
+            )
+        elif self.mode == 'half_half':
+            if current_epoch < self.total_epochs / 2:
+                new_teacher_forcing_ratio = 1.0
+            else:
+                new_teacher_forcing_ratio = 0.0
+        elif self.mode == 'step':
+            if current_epoch < self.step_epoch:
+                new_teacher_forcing_ratio = 1.0
+            else:
+                new_teacher_forcing_ratio = 0.0
+
+            print(clr.Fore.MAGENTA + f"Epoch {current_epoch}: Teacher forcing ratio set to {new_teacher_forcing_ratio:.2f} (step at epoch {self.step_epoch})" + clr.Fore.RESET)
+        elif self.mode == 'None':
+            new_teacher_forcing_ratio = 0.0  # No scheduling, keep constant
+        else:
+            raise ValueError(f"Unsupported scheduling mode: {self.mode}")
+        
+        pl_module.model.parallel_chunking = new_teacher_forcing_ratio

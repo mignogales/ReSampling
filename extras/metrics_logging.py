@@ -4,10 +4,11 @@ from tsl.metrics import torch_metrics
 class MetricsLogger:
     def __init__(self):
         self.log_metrics = {'mae': torch_metrics.MaskedMAE(),
-                            "mae_at_3_days": torch_metrics.MaskedMAE(at=2),
-                            "mae_at_6_days": torch_metrics.MaskedMAE(at=5),
-                            "mae_at_12_days": torch_metrics.MaskedMAE(at=11),
-                            "mae_at_14_days": torch_metrics.MaskedMAE(at=13),
+                            "mae_at_1_step": torch_metrics.MaskedMAE(at=0),
+                            "mae_at_3_step": torch_metrics.MaskedMAE(at=2),
+                            "mae_at_6_step": torch_metrics.MaskedMAE(at=5),
+                            "mae_at_12_step": torch_metrics.MaskedMAE(at=11),
+                            "mae_at_14_step": torch_metrics.MaskedMAE(at=13),
                             'mre': torch_metrics.MaskedMRE(),
                             'mse': torch_metrics.MaskedMSE()}
         
